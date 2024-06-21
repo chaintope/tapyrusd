@@ -14,44 +14,26 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     env:
-      RUST_LOG: bitcoind=debug
+      RUST_LOG: tapyrusd=debug
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-20.04]
         feature:
           [
-            "25_1",
-            "25_0",
-            "24_0_1",
-            "23_1",
-            "22_1",
-            "0_21_2",
-            "0_20_2",
-            "0_19_1",
-            "0_18_1",
-            "0_17_1",
+            "0_5_2",
+            "0_5_1",
           ]
-        include:
-          - os: "macos-11"
-            feature: "25_1"
-          - os: "windows-2019"
-            feature: "25_1"
-
     steps:
       - run: df -h
       - uses: actions/checkout@v3
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.feature }}${{ matrix.os }}
-        if: ${{ matrix.os != 'macos-11' }}  # issue with hard-links on mac
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --features ${{ matrix.feature }}
-      - run: echo "BITCOIND_EXE=$(find ./target/debug -name bitcoind)" >> $GITHUB_ENV
-        if: ${{ matrix.os != 'windows-2019' }}
+      - run: echo "TAPYRUSD_EXE=$(find ./target/debug -name tapyrusd)" >> $GITHUB_ENV
       - run: cargo test
-        if: ${{ matrix.feature != '0_18_1' &&  matrix.feature != '0_17_1' && matrix.os != 'windows-2019' }}  # would fail `test_multi_wallet`
-
 
   cosmetics:
     runs-on: ubuntu-20.04
@@ -89,12 +71,12 @@ jobs:
   build-nix:
     runs-on: ubuntu-20.04
     env:
-      FNAME: bitcoin-23.1-x86_64-linux-gnu.tar.gz
+      FNAME: tapyrus-core-0.5.2-x86_64-linux-gnu.tar.gz
     steps:
       - uses: actions/checkout@v3
       - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/rust-toolchain@stable
-      - run: echo "BITCOIND_TARBALL_FILE=./${FNAME}" >> $GITHUB_ENV
-      - run: cargo build --features 23_1 && exit 1 || exit 0
-      - run: wget -q https://bitcoincore.org/bin/bitcoin-core-23.1/${FNAME}
-      - run: cargo build --features 23_1
+      - run: echo "TAPYRUSD_TARBALL_FILE=./${FNAME}" >> $GITHUB_ENV
+      - run: cargo build --features 0_5_2 && exit 1 || exit 0
+      - run: wget https://github.com/chaintope/tapyrus-core/releases/download/v0.5.2/${FNAME}
+      - run: cargo build --features 0_5_2

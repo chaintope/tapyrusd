@@ -2,9 +2,9 @@
 [![Crates](https://img.shields.io/crates/v/bitcoind.svg)](https://crates.io/crates/bitcoind)
 [![Docs](https://img.shields.io/badge/docs.rs-bitcoind-green)](https://docs.rs/bitcoind)
 
-# Bitcoind
+# Tapyrusd
 
-Utility to run a regtest bitcoind process, useful in integration testing environment.
+Utility to run a regtest tapyrusd process, useful in integration testing environment.
 
 When the auto-download feature is selected by activating one of the version feature, such as `25_1`
 for bitcoin core 25.1, starting a regtest node is as simple as that:
@@ -13,31 +13,31 @@ for bitcoin core 25.1, starting a regtest node is as simple as that:
 // the download feature is enabled whenever a specific version is enabled, for example `25_1` or `24_0_1`
 #[cfg(feature = "download")]
 {
-  use bitcoincore_rpc::RpcApi;
-  let bitcoind = bitcoind::BitcoinD::from_downloaded().unwrap();
-  assert_eq!(0, bitcoind.client.get_blockchain_info().unwrap().blocks);
+  use tapyruscore_rpc::RpcApi;
+  let tapyrusd = tapyrusd::TapyrusD::from_downloaded().unwrap();
+  assert_eq!(0, tapyrusd.client.get_blockchain_info().unwrap().blocks);
 }
 ```
 
 The build script will automatically download the bitcoin core version 25.1 from [bitcoin core](https://bitcoincore.org),
 verify the hashes and place it in the build directory for this crate. If you wish to download from an 
-alternate location, for example locally for CI, use the `BITCOIND_DOWNLOAD_ENDPOINT` env var.
+alternate location, for example locally for CI, use the `TAPYRUSD_DOWNLOAD_ENDPOINT` env var.
 
 When you don't use the auto-download feature you have the following options:
 
-* have `bitcoind` executable in the `PATH`
-* provide the `bitcoind` executable via the `BITCOIND_EXE` env var
+* have `tapyrusd` executable in the `PATH`
+* provide the `tapyrusd` executable via the `TAPYRUSD_EXE` env var
 
 ```rust
-use bitcoincore_rpc::RpcApi;
-if let Ok(exe_path) = bitcoind::exe_path() {
-  let bitcoind = bitcoind::BitcoinD::new(exe_path).unwrap();
+use tapyruscore_rpc::RpcApi;
+if let Ok(exe_path) = tapyrusd::exe_path() {
+  let bitcoind = tapyrusd::TapyrusD::new(exe_path).unwrap();
   assert_eq!(0, bitcoind.client.get_blockchain_info().unwrap().blocks);
 }
 ```
 
-Startup options could be configured via the [`Conf`] struct using [`BitcoinD::with_conf`] or 
-[`BitcoinD::from_downloaded_with_conf`]
+Startup options could be configured via the [`Conf`] struct using [`TapyrusD::with_conf`] or
+[`TapyrusD::from_downloaded_with_conf`]
 
 ## Issues with traditional approach
 
