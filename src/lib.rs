@@ -253,12 +253,19 @@ impl Default for Conf<'_> {
     }
 }
 
-fn get_network_id() -> String {
+/// Return network ID for Tapyrus network.
+pub fn get_network_id() -> String {
     std::env::var("NETWORK_ID").expect("NETWORK_ID must be set")
 }
 
-fn get_genesis_block() -> String {
+/// Return genesis block data.
+pub fn get_genesis_block() -> String {
     std::env::var("GENESIS_BLOCK").expect("GENESIS_BLOCK must be set")
+}
+
+/// Return aggregated private key to generate blocks.
+pub fn get_private_key() -> String {
+    std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set")
 }
 
 impl TapyrusD {
@@ -582,14 +589,10 @@ mod test {
     use crate::exe_path;
     use crate::tapyruscore_rpc::jsonrpc::serde_json::Value;
     use crate::tapyruscore_rpc::{Auth, Client};
-    use crate::{get_available_port, Conf, TapyrusD, LOCAL_IP, P2P};
+    use crate::{get_available_port, get_private_key, Conf, TapyrusD, LOCAL_IP, P2P};
     use std::net::SocketAddrV4;
     use tapyruscore_rpc::RpcApi;
     use tempfile::TempDir;
-
-    fn get_private_key() -> String {
-        std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set")
-    }
 
     #[test]
     fn test_local_ip() {
