@@ -1,17 +1,17 @@
 [package]
-name = "bitcoind"
-version = "0.36.0"
+name = "tapyrusd"
+version = "0.1.0"
 authors = ["Riccardo Casatta <riccardo@casatta.it>"]
-description = "Utility to run a regtest bitcoind process, useful in integration testing environment"
+description = "Utility to run a regtest tapyrusd process, useful in integration testing environment"
 license = "MIT"
-repository = "https://github.com/RCasatta/bitcoind"
-documentation = "https://docs.rs/bitcoind/"
+repository = "https://github.com/chaintope/tapyrusd"
+documentation = "https://docs.rs/tapyrusd/"
 rust-version = "1.56.1"
 edition = "2018"
 categories = ["cryptography::cryptocurrencies", "development-tools::testing"]
 
 [dependencies]
-bitcoincore-rpc = { version = "0.19", features = ["rand"] }
+tapyruscore-rpc = { git="https://github.com/chaintope/rust-tapyruscore-rpc", subdir = "client", features = ["rand"] }
 log = "0.4"
 which = "4.2.5"
 anyhow = "1.0.66"
@@ -35,17 +35,9 @@ anyhow = "1.0.66"
 # download is not supposed to be used directly only through selecting one of the version feature
 "download" = ["bitcoin_hashes", "flate2", "tar", "minreq", "zip"]
 
-"26_0" = ["download", "25_1"]
-"25_1" = ["download", "25_0"]
-"25_0" = ["download", "24_0_1"]
-"24_0_1" = ["download", "23_1"]
-"23_1" = ["download", "22_1"]
-"22_1" = ["download", "0_21_2"]
-"0_21_2" = ["download", "0_20_2"]
-"0_20_2" = ["download", "0_19_1"]
-"0_19_1" = ["download", "0_18_1"]
-"0_18_1" = ["download", "0_17_1"]
-"0_17_1" = ["download"]
+"0_5_2" = ["download", "0_5_1"]
+"0_5_1" = ["download"]
+
 
 "doc" = [] # used only for documentation building
 

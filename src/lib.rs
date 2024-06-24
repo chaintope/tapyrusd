@@ -3,29 +3,31 @@
 
 mod versions;
 
-use crate::bitcoincore_rpc::jsonrpc::serde_json::Value;
+use crate::tapyruscore_rpc::jsonrpc::serde_json::Value;
 use anyhow::Context;
-use bitcoincore_rpc::{Auth, Client, RpcApi};
 use log::{debug, error, warn};
 use std::ffi::OsStr;
+use std::fs::File;
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 use std::{env, fmt, fs, thread};
+use tapyruscore_rpc::{Auth, Client, RpcApi};
 use tempfile::TempDir;
 
 pub use anyhow;
-pub use bitcoincore_rpc;
+pub use tapyruscore_rpc;
 pub use tempfile;
 pub use which;
 
 #[derive(Debug)]
-/// Struct representing the bitcoind process with related information
-pub struct BitcoinD {
+/// Struct representing the tapyrusd process with related information
+pub struct TapyrusD {
     /// Process child handle, used to terminate the process when this struct is dropped
     process: Child,
-    /// Rpc client linked to this bitcoind process
+    /// Rpc client linked to this tapyrusd process
     pub client: Client,
     /// Work directory, where the node store blocks and other stuff.
     work_dir: DataDir,
@@ -98,7 +100,7 @@ pub enum P2P {
     /// the node open a p2p port
     Yes,
     /// The node open a p2p port and also connects to the url given as parameter, it's handy to
-    /// initialize this with [BitcoinD::p2p_connect] of another node. The `bool` parameter indicates
+    /// initialize this with [TapyrusD::p2p_connect] of another node. The `bool` parameter indicates
     /// if the node can accept connection too.
     Connect(SocketAddrV4, bool),
 }
@@ -107,15 +109,15 @@ pub enum P2P {
 pub enum Error {
     /// Wrapper of io Error
     Io(std::io::Error),
-    /// Wrapper of bitcoincore_rpc Error
-    Rpc(bitcoincore_rpc::Error),
+    /// Wrapper of tapyruscore_rpc Error
+    Rpc(tapyruscore_rpc::Error),
     /// Returned when calling methods requiring a feature to be activated, but it's not
     NoFeature,
     /// Returned when calling methods requiring a env var to exist, but it's not
     NoEnvVar,
-    /// Returned when calling methods requiring the bitcoind executable but none is found
-    /// (no feature, no `BITCOIND_EXE`, no `bitcoind` in `PATH` )
-    NoBitcoindExecutableFound,
+    /// Returned when calling methods requiring the tapyrusd executable but none is found
+    /// (no feature, no `TAPYRUSD_EXE`, no `tapyrusd` in `PATH` )
+    NoTapyrusdExecutableFound,
     /// Wrapper of early exit status
     EarlyExit(ExitStatus),
     /// Returned when both tmpdir and staticdir is specified in `Conf` options
@@ -123,7 +125,7 @@ pub enum Error {
     /// Returned when -rpcuser and/or -rpcpassword is used in `Conf` args
     /// It will soon be deprecated, please use -rpcauth instead
     RpcUserAndPasswordUsed,
-    /// Returned when expecting an auto-downloaded executable but `BITCOIND_SKIP_DOWNLOAD` env var is set
+    /// Returned when expecting an auto-downloaded executable but `TAPYRUSD_SKIP_DOWNLOAD` env var is set
     SkipDownload,
 }
 
@@ -131,14 +133,14 @@ impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Io(_) => write!(f, "io::Error"),
-            Error::Rpc(_) => write!(f, "bitcoin_rpc::Error"),
+            Error::Rpc(_) => write!(f, "tapyrus_rpc::Error"),
             Error::NoFeature => write!(f, "Called a method requiring a feature to be set, but it's not"),
-            Error::NoEnvVar => write!(f, "Called a method requiring env var `BITCOIND_EXE` to be set, but it's not"),
-            Error::NoBitcoindExecutableFound =>  write!(f, "`bitcoind` executable is required, provide it with one of the following: set env var `BITCOIND_EXE` or use a feature like \"22_1\" or have `bitcoind` executable in the `PATH`"),
-            Error::EarlyExit(e) => write!(f, "The bitcoind process terminated early with exit code {}", e),
+            Error::NoEnvVar => write!(f, "Called a method requiring env var `TAPYRUSD_EXE` to be set, but it's not"),
+            Error::NoTapyrusdExecutableFound =>  write!(f, "`tapyrusd` executable is required, provide it with one of the following: set env var `TAPYRUSD_EXE` or use a feature like \"22_1\" or have `tapyrusd` executable in the `PATH`"),
+            Error::EarlyExit(e) => write!(f, "The tapyrusd process terminated early with exit code {}", e),
             Error::BothDirsSpecified => write!(f, "tempdir and staticdir cannot be enabled at same time in configuration options"),
             Error::RpcUserAndPasswordUsed => write!(f, "`-rpcuser` and `-rpcpassword` cannot be used, it will be deprecated soon and it's recommended to use `-rpcauth` instead which works alongside with the default cookie authentication"),
-            Error::SkipDownload => write!(f, "expecting an auto-downloaded executable but `BITCOIND_SKIP_DOWNLOAD` env var is set"),
+            Error::SkipDownload => write!(f, "expecting an auto-downloaded executable but `TAPYRUSD_SKIP_DOWNLOAD` env var is set"),
         }
     }
 }
@@ -171,26 +173,26 @@ const INVALID_ARGS: [&str; 2] = ["-rpcuser", "-rpcpassword"];
 ///
 /// Default values:
 /// ```
-/// let mut conf = bitcoind::Conf::default();
-/// conf.args = vec!["-regtest", "-fallbackfee=0.0001"];
+/// let mut conf = tapyrusd::Conf::default();
+/// conf.args = vec!["-dev".to_string(), "-fallbackfee=0.0001".to_string(), "-networkid=1905960821".to_string()];
 /// conf.view_stdout = false;
-/// conf.p2p = bitcoind::P2P::No;
-/// conf.network = "regtest";
+/// conf.p2p = tapyrusd::P2P::No;
+/// conf.network = "dev";
 /// conf.tmpdir = None;
 /// conf.staticdir = None;
 /// conf.attempts = 3;
-/// assert_eq!(conf, bitcoind::Conf::default());
+/// assert_eq!(conf, tapyrusd::Conf::default());
 /// ```
 ///
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Conf<'a> {
-    /// Bitcoind command line arguments containing no spaces like `vec!["-dbcache=300", "-regtest"]`
+    /// Tapyrusd command line arguments containing no spaces like `vec!["-dbcache=300", "-dev"]`
     /// note that `port`, `rpcport`, `connect`, `datadir`, `listen`
     /// cannot be used because they are automatically initialized.
-    pub args: Vec<&'a str>,
+    pub args: Vec<String>,
 
-    /// if `true` bitcoind log output will not be suppressed
+    /// if `true` tapyrusd log output will not be suppressed
     pub view_stdout: bool,
 
     /// Allows to specify options to open p2p port or connect to the another node
@@ -231,11 +233,18 @@ pub struct Conf<'a> {
 
 impl Default for Conf<'_> {
     fn default() -> Self {
+        let networkid_arg = format!("-networkid={}", get_network_id());
+        let args = vec![
+            "-dev".to_owned(),
+            "-fallbackfee=0.0001".to_owned(),
+            networkid_arg,
+        ];
+
         Conf {
-            args: vec!["-regtest", "-fallbackfee=0.0001"],
+            args,
             view_stdout: false,
             p2p: P2P::No,
-            network: "regtest",
+            network: "dev",
             tmpdir: None,
             staticdir: None,
             attempts: 3,
@@ -244,16 +253,31 @@ impl Default for Conf<'_> {
     }
 }
 
-impl BitcoinD {
-    /// Launch the bitcoind process from the given `exe` executable with default args.
+/// Return network ID for Tapyrus network.
+pub fn get_network_id() -> String {
+    std::env::var("NETWORK_ID").expect("NETWORK_ID must be set")
+}
+
+/// Return genesis block data.
+pub fn get_genesis_block() -> String {
+    std::env::var("GENESIS_BLOCK").expect("GENESIS_BLOCK must be set")
+}
+
+/// Return aggregated private key to generate blocks.
+pub fn get_private_key() -> String {
+    std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set")
+}
+
+impl TapyrusD {
+    /// Launch the tapyrusd process from the given `exe` executable with default args.
     ///
     /// Waits for the node to be ready to accept connections before returning
-    pub fn new<S: AsRef<OsStr>>(exe: S) -> anyhow::Result<BitcoinD> {
-        BitcoinD::with_conf(exe, &Conf::default())
+    pub fn new<S: AsRef<OsStr>>(exe: S) -> anyhow::Result<TapyrusD> {
+        TapyrusD::with_conf(exe, &Conf::default())
     }
 
-    /// Launch the bitcoind process from the given `exe` executable with given [Conf] param
-    pub fn with_conf<S: AsRef<OsStr>>(exe: S, conf: &Conf) -> anyhow::Result<BitcoinD> {
+    /// Launch the tapyrusd process from the given `exe` executable with given [Conf] param
+    pub fn with_conf<S: AsRef<OsStr>>(exe: S, conf: &Conf) -> anyhow::Result<TapyrusD> {
         let tmpdir = conf
             .tmpdir
             .clone()
@@ -270,7 +294,9 @@ impl BitcoinD {
 
         let work_dir_path = work_dir.path();
         debug!("work_dir: {:?}", work_dir_path);
-        let cookie_file = work_dir_path.join(conf.network).join(".cookie");
+        let cookie_file = work_dir_path
+            .join(format!("{}-{}", conf.network, get_network_id()))
+            .join(".cookie");
         let rpc_port = get_available_port()?;
         let rpc_socket = SocketAddrV4::new(LOCAL_IP, rpc_port);
         let rpc_url = format!("http://{}", rpc_socket);
@@ -325,13 +351,23 @@ impl BitcoinD {
         let default_args = [&datadir_arg, &rpc_arg];
         let conf_args = validate_args(conf.args.clone())?;
 
-        debug!(
+        println!(
             "launching {:?} with args: {:?} {:?} AND custom args: {:?}",
             exe.as_ref(),
             default_args,
             p2p_args,
             conf_args
         );
+
+        File::create(format!(
+            "{}/genesis.{}",
+            work_dir_path.display(),
+            get_network_id()
+        ))
+        .and_then(|mut f| {
+            let genesis_block = get_genesis_block();
+            f.write_all(genesis_block.as_bytes())
+        })?;
 
         let mut process = Command::new(exe.as_ref())
             .args(default_args)
@@ -344,7 +380,7 @@ impl BitcoinD {
 
         let node_url_default = format!("{}/wallet/default", rpc_url);
         let mut i = 0;
-        // wait bitcoind is ready, use default wallet
+        // wait tapyrusd is ready, use default wallet
         let client = loop {
             if let Some(status) = process.try_wait()? {
                 if conf.attempts > 0 {
@@ -380,7 +416,7 @@ impl BitcoinD {
             }
 
             debug!(
-                "bitcoin client for process {} not ready ({})",
+                "tapyrus client for process {} not ready ({})",
                 process.id(),
                 i
             );
@@ -388,7 +424,7 @@ impl BitcoinD {
             i += 1;
         };
 
-        Ok(BitcoinD {
+        Ok(TapyrusD {
             process,
             client,
             work_dir,
@@ -407,7 +443,7 @@ impl BitcoinD {
         format!("http://{}", self.params.rpc_socket)
     }
 
-    #[cfg(any(feature = "0_19_1", not(feature = "download")))]
+    #[cfg(not(feature = "download"))]
     /// Returns the rpc URL including the schema and the given `wallet_name`
     /// eg. http://127.0.0.1:44842/wallet/my_wallet
     pub fn rpc_url_with_wallet<T: AsRef<str>>(&self, wallet_name: T) -> String {
@@ -434,7 +470,7 @@ impl BitcoinD {
         Ok(self.process.wait()?)
     }
 
-    #[cfg(any(feature = "0_19_1", not(feature = "download")))]
+    #[cfg(not(feature = "download"))]
     /// Create a new wallet in the running node, and return an RPC client connected to the just
     /// created wallet
     pub fn create_wallet<T: AsRef<str>>(&self, wallet: T) -> anyhow::Result<Client> {
@@ -449,18 +485,18 @@ impl BitcoinD {
 }
 
 #[cfg(feature = "download")]
-impl BitcoinD {
-    /// create BitcoinD struct with the downloaded executable.
-    pub fn from_downloaded() -> anyhow::Result<BitcoinD> {
-        BitcoinD::new(downloaded_exe_path()?)
+impl TapyrusD {
+    /// create TapyrusD struct with the downloaded executable.
+    pub fn from_downloaded() -> anyhow::Result<TapyrusD> {
+        TapyrusD::new(downloaded_exe_path()?)
     }
-    /// create BitcoinD struct with the downloaded executable and given Conf.
-    pub fn from_downloaded_with_conf(conf: &Conf) -> anyhow::Result<BitcoinD> {
-        BitcoinD::with_conf(downloaded_exe_path()?, conf)
+    /// create TapyrusD struct with the downloaded executable and given Conf.
+    pub fn from_downloaded_with_conf(conf: &Conf) -> anyhow::Result<TapyrusD> {
+        TapyrusD::with_conf(downloaded_exe_path()?, conf)
     }
 }
 
-impl Drop for BitcoinD {
+impl Drop for TapyrusD {
     fn drop(&mut self) {
         if let DataDir::Persistent(_) = self.work_dir {
             let _ = self.stop();
@@ -484,59 +520,59 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<bitcoincore_rpc::Error> for Error {
-    fn from(e: bitcoincore_rpc::Error) -> Self {
+impl From<tapyruscore_rpc::Error> for Error {
+    fn from(e: tapyruscore_rpc::Error) -> Self {
         Error::Rpc(e)
     }
 }
 
-/// Provide the bitcoind executable path if a version feature has been specified
+/// Provide the tapyrusd executable path if a version feature has been specified
 #[cfg(not(feature = "download"))]
 pub fn downloaded_exe_path() -> anyhow::Result<String> {
     Err(Error::NoFeature.into())
 }
 
-/// Provide the bitcoind executable path if a version feature has been specified
+/// Provide the tapyrusd executable path if a version feature has been specified
 #[cfg(feature = "download")]
 pub fn downloaded_exe_path() -> anyhow::Result<String> {
-    if std::env::var_os("BITCOIND_SKIP_DOWNLOAD").is_some() {
+    if std::env::var_os("TAPYRUSD_SKIP_DOWNLOAD").is_some() {
         return Err(Error::SkipDownload.into());
     }
 
     let mut path: PathBuf = env!("OUT_DIR").into();
-    path.push("bitcoin");
-    path.push(format!("bitcoin-{}", versions::VERSION));
+    path.push("tapyrus");
+    path.push(format!("tapyrus-core-{}", versions::VERSION));
     path.push("bin");
 
     if cfg!(target_os = "windows") {
-        path.push("bitcoind.exe");
+        path.push("tapyrusd.exe");
     } else {
-        path.push("bitcoind");
+        path.push("tapyrusd");
     }
 
     Ok(format!("{}", path.display()))
 }
 
-/// Returns the daemon `bitcoind` executable with the following precedence:
+/// Returns the daemon `tapyrusd` executable with the following precedence:
 ///
-/// 1) If it's specified in the `BITCOIND_EXE` env var
+/// 1) If it's specified in the `TAPYRUSD_EXE` env var
 /// 2) If there is no env var but an auto-download feature such as `23_1` is enabled, returns the
 /// path of the downloaded executabled
-/// 3) If neither of the precedent are available, the `bitcoind` executable is searched in the `PATH`
+/// 3) If neither of the precedent are available, the `tapyrusd` executable is searched in the `PATH`
 pub fn exe_path() -> anyhow::Result<String> {
-    if let Ok(path) = std::env::var("BITCOIND_EXE") {
+    if let Ok(path) = std::env::var("TAPYRUSD_EXE") {
         return Ok(path);
     }
     if let Ok(path) = downloaded_exe_path() {
         return Ok(path);
     }
-    which::which("bitcoind")
-        .map_err(|_| Error::NoBitcoindExecutableFound.into())
+    which::which("tapyrusd")
+        .map_err(|_| Error::NoTapyrusdExecutableFound.into())
         .map(|p| p.display().to_string())
 }
 
 /// Validate the specified arg if there is any unavailable or deprecated one
-pub fn validate_args(args: Vec<&str>) -> anyhow::Result<Vec<&str>> {
+pub fn validate_args(args: Vec<String>) -> anyhow::Result<Vec<String>> {
     args.iter().try_for_each(|arg| {
         // other kind of invalid arguments can be added into the list if needed
         if INVALID_ARGS.iter().any(|x| arg.starts_with(x)) {
@@ -550,12 +586,12 @@ pub fn validate_args(args: Vec<&str>) -> anyhow::Result<Vec<&str>> {
 
 #[cfg(test)]
 mod test {
-    use crate::bitcoincore_rpc::jsonrpc::serde_json::Value;
-    use crate::bitcoincore_rpc::{Auth, Client};
     use crate::exe_path;
-    use crate::{get_available_port, BitcoinD, Conf, LOCAL_IP, P2P};
-    use bitcoincore_rpc::RpcApi;
+    use crate::tapyruscore_rpc::jsonrpc::serde_json::Value;
+    use crate::tapyruscore_rpc::{Auth, Client};
+    use crate::{get_available_port, get_private_key, Conf, TapyrusD, LOCAL_IP, P2P};
     use std::net::SocketAddrV4;
+    use tapyruscore_rpc::RpcApi;
     use tempfile::TempDir;
 
     #[test]
@@ -567,36 +603,35 @@ mod test {
     }
 
     #[test]
-    fn test_bitcoind() {
+    fn test_tapyrusd() {
         let exe = init();
-        let bitcoind = BitcoinD::new(exe).unwrap();
-        let info = bitcoind.client.get_blockchain_info().unwrap();
+        let tapyrusd = TapyrusD::new(exe).unwrap();
+        let info = tapyrusd.client.get_blockchain_info().unwrap();
         assert_eq!(0, info.blocks);
-        let address = bitcoind
+        let address = tapyrusd
             .client
-            .get_new_address(None, None)
+            .get_new_address(None)
             .unwrap()
             .assume_checked();
-        let _ = bitcoind.client.generate_to_address(1, &address).unwrap();
-        let info = bitcoind.client.get_blockchain_info().unwrap();
+        let _ = tapyrusd
+            .client
+            .generate_to_address(1, &address, get_private_key())
+            .unwrap();
+        let info = tapyrusd.client.get_blockchain_info().unwrap();
         assert_eq!(1, info.blocks);
     }
 
     #[test]
-    #[cfg(feature = "0_21_2")]
+    #[ignore]
     fn test_getindexinfo() {
         let exe = init();
         let mut conf = Conf::default();
-        conf.args.push("-txindex");
-        let bitcoind = BitcoinD::with_conf(&exe, &conf).unwrap();
-        assert!(
-            bitcoind.client.version().unwrap() >= 210_000,
-            "getindexinfo requires bitcoin >0.21"
-        );
-        let info: std::collections::HashMap<String, bitcoincore_rpc::jsonrpc::serde_json::Value> =
-            bitcoind.client.call("getindexinfo", &[]).unwrap();
+        conf.args.push("-txindex".to_owned());
+        let tapyrusd = TapyrusD::with_conf(&exe, &conf).unwrap();
+        let info: std::collections::HashMap<String, tapyruscore_rpc::jsonrpc::serde_json::Value> =
+            tapyrusd.client.call("getindexinfo", &[]).unwrap();
         assert!(info.contains_key("txindex"));
-        assert!(bitcoind.client.version().unwrap() >= 210_000);
+        assert!(tapyrusd.client.version().unwrap() >= 210_000);
     }
 
     #[test]
@@ -605,14 +640,14 @@ mod test {
         let mut conf = Conf::default();
         conf.p2p = P2P::Yes;
 
-        let bitcoind = BitcoinD::with_conf(&exe, &conf).unwrap();
-        assert_eq!(peers_connected(&bitcoind.client), 0);
+        let tapyrusd = TapyrusD::with_conf(&exe, &conf).unwrap();
+        assert_eq!(peers_connected(&tapyrusd.client), 0);
         let mut other_conf = Conf::default();
-        other_conf.p2p = bitcoind.p2p_connect(false).unwrap();
+        other_conf.p2p = tapyrusd.p2p_connect(false).unwrap();
 
-        let other_bitcoind = BitcoinD::with_conf(&exe, &other_conf).unwrap();
-        assert_eq!(peers_connected(&bitcoind.client), 1);
-        assert_eq!(peers_connected(&other_bitcoind.client), 1);
+        let other_tapyrusd = TapyrusD::with_conf(&exe, &other_conf).unwrap();
+        assert_eq!(peers_connected(&tapyrusd.client), 1);
+        assert_eq!(peers_connected(&other_tapyrusd.client), 1);
     }
 
     #[cfg(not(target_os = "windows"))] // TODO: investigate why it doesn't work in windows
@@ -623,29 +658,28 @@ mod test {
         let datadir = TempDir::new().unwrap();
         conf.staticdir = Some(datadir.path().to_path_buf());
 
-        // Start BitcoinD with persistent db config
+        // Start TapyrusD with persistent db config
         // Generate 101 blocks
         // Wallet balance should be 50
-        let bitcoind = BitcoinD::with_conf(exe_path().unwrap(), &conf).unwrap();
-        let core_addrs = bitcoind
+        let tapyrusd = TapyrusD::with_conf(exe_path().unwrap(), &conf).unwrap();
+        let core_addrs = tapyrusd
             .client
-            .get_new_address(None, None)
+            .get_new_address(None)
             .unwrap()
             .assume_checked();
-        bitcoind
+        tapyrusd
             .client
-            .generate_to_address(101, &core_addrs)
+            .generate_to_address(101, &core_addrs, get_private_key())
             .unwrap();
-        let wallet_balance_1 = bitcoind.client.get_balance(None, None).unwrap();
-        let best_block_1 = bitcoind.client.get_best_block_hash().unwrap();
+        let wallet_balance_1 = tapyrusd.client.get_balance(None).unwrap();
+        let best_block_1 = tapyrusd.client.get_best_block_hash().unwrap();
+        drop(tapyrusd);
 
-        drop(bitcoind);
+        // Start a new TapyrusD with the same datadir
+        let tapyrusd = TapyrusD::with_conf(exe_path().unwrap(), &conf).unwrap();
 
-        // Start a new BitcoinD with the same datadir
-        let bitcoind = BitcoinD::with_conf(exe_path().unwrap(), &conf).unwrap();
-
-        let wallet_balance_2 = bitcoind.client.get_balance(None, None).unwrap();
-        let best_block_2 = bitcoind.client.get_best_block_hash().unwrap();
+        let wallet_balance_2 = tapyrusd.client.get_balance(None).unwrap();
+        let best_block_2 = tapyrusd.client.get_best_block_hash().unwrap();
 
         // Check node chain data persists
         assert_eq!(best_block_1, best_block_2);
@@ -659,17 +693,17 @@ mod test {
         let _ = env_logger::try_init();
         let mut conf_node1 = Conf::default();
         conf_node1.p2p = P2P::Yes;
-        let node1 = BitcoinD::with_conf(exe_path().unwrap(), &conf_node1).unwrap();
+        let node1 = TapyrusD::with_conf(exe_path().unwrap(), &conf_node1).unwrap();
 
         // Create Node 2 connected Node 1
         let mut conf_node2 = Conf::default();
         conf_node2.p2p = node1.p2p_connect(true).unwrap();
-        let node2 = BitcoinD::with_conf(exe_path().unwrap(), &conf_node2).unwrap();
+        let node2 = TapyrusD::with_conf(exe_path().unwrap(), &conf_node2).unwrap();
 
         // Create Node 3 Connected To Node
         let mut conf_node3 = Conf::default();
         conf_node3.p2p = node2.p2p_connect(false).unwrap();
-        let node3 = BitcoinD::with_conf(exe_path().unwrap(), &conf_node3).unwrap();
+        let node3 = TapyrusD::with_conf(exe_path().unwrap(), &conf_node3).unwrap();
 
         // Get each nodes Peers
         let node1_peers = peers_connected(&node1.client);
@@ -682,40 +716,41 @@ mod test {
         assert_eq!(node3_peers, 1, "listen false but more than 1 peer");
     }
 
-    #[cfg(any(feature = "0_19_1", not(feature = "download")))]
+    #[cfg(not(feature = "download"))]
     #[test]
+    #[ignore]
     fn test_multi_wallet() {
-        use bitcoincore_rpc::bitcoin::Amount;
-        let exe = init();
-        let bitcoind = BitcoinD::new(exe).unwrap();
-        let alice = bitcoind.create_wallet("alice").unwrap();
-        let alice_address = alice.get_new_address(None, None).unwrap().assume_checked();
-        let bob = bitcoind.create_wallet("bob").unwrap();
-        let bob_address = bob.get_new_address(None, None).unwrap().assume_checked();
-        bitcoind
+        use tapyruscore_rpc::tapyrus::Amount;
+        let exe: String = init();
+        let tapyrusd = TapyrusD::new(exe).unwrap();
+        let alice = tapyrusd.create_wallet("alice").unwrap();
+        let alice_address = alice.get_new_address(None).unwrap().assume_checked();
+        let bob = tapyrusd.create_wallet("bob").unwrap();
+        let bob_address = bob.get_new_address(None).unwrap().assume_checked();
+        tapyrusd
             .client
-            .generate_to_address(1, &alice_address)
+            .generate_to_address(1, &alice_address, get_private_key())
             .unwrap();
-        bitcoind
+        tapyrusd
             .client
-            .generate_to_address(101, &bob_address)
+            .generate_to_address(101, &bob_address, get_private_key())
             .unwrap();
         assert_eq!(
-            Amount::from_btc(50.0).unwrap(),
+            Amount::from_tpc(50.0).unwrap(),
             alice.get_balances().unwrap().mine.trusted
         );
         assert_eq!(
-            Amount::from_btc(50.0).unwrap(),
+            Amount::from_tpc(50.0).unwrap(),
             bob.get_balances().unwrap().mine.trusted
         );
         assert_eq!(
-            Amount::from_btc(5000.0).unwrap(),
+            Amount::from_tpc(5000.0).unwrap(),
             bob.get_balances().unwrap().mine.immature
         );
         let _txid = alice
             .send_to_address(
                 &bob_address,
-                Amount::from_btc(1.0).unwrap(),
+                Amount::from_tpc(1.0).unwrap(),
                 None,
                 None,
                 None,
@@ -725,81 +760,83 @@ mod test {
             )
             .unwrap();
         assert!(
-            alice.get_balances().unwrap().mine.trusted < Amount::from_btc(49.0).unwrap()
-                && alice.get_balances().unwrap().mine.trusted > Amount::from_btc(48.9).unwrap()
+            alice.get_balances().unwrap().mine.trusted < Amount::from_tpc(49.0).unwrap()
+                && alice.get_balances().unwrap().mine.trusted > Amount::from_tpc(48.9).unwrap()
         );
 
         // bob wallet may not be immediately updated
         for _ in 0..30 {
-            if bob.get_balances().unwrap().mine.untrusted_pending.to_sat() > 0 {
+            if bob.get_balances().unwrap().mine.untrusted_pending.to_tap() > 0 {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         assert_eq!(
-            Amount::from_btc(1.0).unwrap(),
+            Amount::from_tpc(1.0).unwrap(),
             bob.get_balances().unwrap().mine.untrusted_pending
         );
         assert!(
-            bitcoind.create_wallet("bob").is_err(),
+            tapyrusd.create_wallet("bob").is_err(),
             "wallet already exist"
         );
     }
 
     #[test]
-    fn test_bitcoind_rpcuser_and_rpcpassword() {
+    fn test_tapyrusd_rpcuser_and_rpcpassword() {
         let exe = init();
 
         let mut conf = Conf::default();
-        conf.args.push("-rpcuser=bitcoind");
-        conf.args.push("-rpcpassword=bitcoind");
+        conf.args.push("-rpcuser=tapyrusd".to_owned());
+        conf.args.push("-rpcpassword=tapyrusd".to_owned());
 
-        let bitcoind = BitcoinD::with_conf(exe, &conf);
+        let tapyrusd = TapyrusD::with_conf(exe, &conf);
 
-        assert!(bitcoind.is_err());
+        assert!(tapyrusd.is_err());
     }
 
     #[test]
-    fn test_bitcoind_rpcauth() {
+    fn test_tapyrusd_rpcauth() {
         let exe = init();
 
         let mut conf = Conf::default();
         // rpcauth generated with [rpcauth.py](https://github.com/bitcoin/bitcoin/blob/master/share/rpcauth/rpcauth.py)
         // this could be also added to bitcoind, example: [RpcAuth](https://github.com/testcontainers/testcontainers-rs/blob/dev/testcontainers/src/images/coblox_bitcoincore.rs#L39-L91)
-        conf.args.push("-rpcauth=bitcoind:cccd5d7fd36e55c1b8576b8077dc1b83$60b5676a09f8518dcb4574838fb86f37700cd690d99bd2fdc2ea2bf2ab80ead6");
+        conf.args.push("-rpcauth=tapyrusd:8898c01e60d6c157657d54cced2e8552$b74ce37cfb980b95c96b79ee659f658969d574865b909a77327bc584e6991211".to_owned());
 
-        let bitcoind = BitcoinD::with_conf(exe, &conf).unwrap();
+        let tapyrusd = TapyrusD::with_conf(exe, &conf).unwrap();
 
         let client = Client::new(
-            format!("{}/wallet/default", bitcoind.rpc_url().as_str()).as_str(),
-            Auth::UserPass("bitcoind".to_string(), "bitcoind".to_string()),
+            format!("{}/wallet/default", tapyrusd.rpc_url().as_str()).as_str(),
+            Auth::UserPass("tapyrusd".to_string(), "tapyrusd".to_string()),
         )
         .unwrap();
 
         let info = client.get_blockchain_info().unwrap();
         assert_eq!(0, info.blocks);
 
-        let address = client.get_new_address(None, None).unwrap().assume_checked();
-        let _ = client.generate_to_address(1, &address).unwrap();
-        let info = bitcoind.client.get_blockchain_info().unwrap();
+        let address = client.get_new_address(None).unwrap().assume_checked();
+        let _ = client
+            .generate_to_address(1, &address, get_private_key())
+            .unwrap();
+        let info = tapyrusd.client.get_blockchain_info().unwrap();
         assert_eq!(1, info.blocks);
     }
 
     #[test]
     fn test_get_cookie_user_and_pass() {
         let exe = init();
-        let bitcoind = BitcoinD::new(exe).unwrap();
+        let tapyrusd = TapyrusD::new(exe).unwrap();
 
-        let user: &str = "bitcoind_user";
-        let password: &str = "bitcoind_password";
+        let user: &str = "tapyrusd_user";
+        let password: &str = "tapyrusd_password";
 
         std::fs::write(
-            &bitcoind.params.cookie_file,
+            &tapyrusd.params.cookie_file,
             format!("{}:{}", user, password),
         )
         .unwrap();
 
-        let result_values = bitcoind.params.get_cookie_values().unwrap().unwrap();
+        let result_values = tapyrusd.params.get_cookie_values().unwrap().unwrap();
 
         assert_eq!(user, result_values.user);
         assert_eq!(password, result_values.password);
@@ -809,19 +846,19 @@ mod test {
     fn zmq_interface_enabled() {
         let mut conf = Conf::default();
         conf.enable_zmq = true;
-        let bitcoind = BitcoinD::with_conf(exe_path().unwrap(), &conf).unwrap();
+        let tapyrusd = TapyrusD::with_conf(exe_path().unwrap(), &conf).unwrap();
 
-        assert!(bitcoind.params.zmq_pub_raw_tx_socket.is_some());
-        assert!(bitcoind.params.zmq_pub_raw_block_socket.is_some());
+        assert!(tapyrusd.params.zmq_pub_raw_tx_socket.is_some());
+        assert!(tapyrusd.params.zmq_pub_raw_block_socket.is_some());
     }
 
     #[test]
     fn zmq_interface_disabled() {
         let exe = init();
-        let bitcoind = BitcoinD::new(exe).unwrap();
+        let tapyrusd = TapyrusD::new(exe).unwrap();
 
-        assert!(bitcoind.params.zmq_pub_raw_tx_socket.is_none());
-        assert!(bitcoind.params.zmq_pub_raw_block_socket.is_none());
+        assert!(tapyrusd.params.zmq_pub_raw_tx_socket.is_none());
+        assert!(tapyrusd.params.zmq_pub_raw_block_socket.is_none());
     }
 
     fn peers_connected(client: &Client) -> usize {

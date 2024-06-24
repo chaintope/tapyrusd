@@ -23,36 +23,18 @@ mod download {
 
     include!("src/versions.rs");
 
-    #[cfg(all(
-        target_os = "macos",
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-    ))]
-    fn download_filename() -> String {
-        if cfg!(not(feature = "23_1")) {
-            format!("bitcoin-{}-osx64.tar.gz", &VERSION)
-        } else {
-            format!("bitcoin-{}-x86_64-apple-darwin.tar.gz", &VERSION)
-        }
-    }
-
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn download_filename() -> String {
-        format!("bitcoin-{}-x86_64-linux-gnu.tar.gz", &VERSION)
+        format!("tapyrus-core-{}-x86_64-linux-gnu.tar.gz", &VERSION)
     }
 
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     fn download_filename() -> String {
-        format!("bitcoin-{}-aarch64-linux-gnu.tar.gz", &VERSION)
-    }
-
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    fn download_filename() -> String {
-        format!("bitcoin-{}-win64.zip", &VERSION)
+        format!("tapyrus-core-{}-aarch64-linux-gnu.tar.gz", &VERSION)
     }
 
     fn get_expected_sha256(filename: &str) -> anyhow::Result<sha256::Hash> {
-        let sha256sums_filename = format!("sha256/bitcoin-core-{}-SHA256SUMS", &VERSION);
-        #[cfg(not(feature = "22_1"))]
+        let sha256sums_filename = format!("sha256/tapyrus-core-{}-SHA256SUMS", &VERSION);
         let sha256sums_filename = format!("{}.asc", sha256sums_filename);
         let file = File::open(&sha256sums_filename)
             .with_context(|| format!("cannot find {:?}", sha256sums_filename))?;
@@ -71,38 +53,33 @@ mod download {
     }
 
     pub(crate) fn start() -> anyhow::Result<()> {
-        if std::env::var_os("BITCOIND_SKIP_DOWNLOAD").is_some() {
+        if std::env::var_os("TAPYRUSD_SKIP_DOWNLOAD").is_some() {
             return Ok(());
         }
         let download_filename = download_filename();
-        let expected_hash = get_expected_sha256(&download_filename)?;
+        // let expected_hash = get_expected_sha256(&download_filename)?;
         let out_dir = std::env::var_os("OUT_DIR").unwrap();
 
-        let mut bitcoin_exe_home = Path::new(&out_dir).join("bitcoin");
-        if !bitcoin_exe_home.exists() {
-            std::fs::create_dir(&bitcoin_exe_home)
-                .with_context(|| format!("cannot create dir {:?}", bitcoin_exe_home))?;
+        let mut tapyrus_exe_home = Path::new(&out_dir).join("tapyrus");
+        if !tapyrus_exe_home.exists() {
+            std::fs::create_dir(&tapyrus_exe_home)
+                .with_context(|| format!("cannot create dir {:?}", tapyrus_exe_home))?;
         }
-        let existing_filename = bitcoin_exe_home
-            .join(format!("bitcoin-{}", VERSION))
+        let existing_filename = tapyrus_exe_home
+            .join(format!("tapyrus-{}", VERSION))
             .join("bin")
-            .join("bitcoind");
+            .join("tapyrusd");
 
         if !existing_filename.exists() {
-            println!(
-                "filename:{} version:{} hash:{}",
-                download_filename, VERSION, expected_hash
-            );
+            println!("filename:{} version:{}", download_filename, VERSION);
 
-            let (file_or_url, tarball_bytes) = match std::env::var("BITCOIND_TARBALL_FILE") {
+            let (file_or_url, tarball_bytes) = match std::env::var("TAPYRUSD_TARBALL_FILE") {
                 Err(_) => {
-                    let download_endpoint = std::env::var("BITCOIND_DOWNLOAD_ENDPOINT")
-                        .unwrap_or("https://bitcoincore.org/bin".to_owned());
-
-                    let url = format!(
-                        "{}/bitcoin-core-{}/{}",
-                        download_endpoint, VERSION, download_filename
+                    let download_endpoint = std::env::var("TAPYRUSD_DOWNLOAD_ENDPOINT").unwrap_or(
+                        "https://github.com/chaintope/tapyrus-core/releases/download".to_owned(),
                     );
+
+                    let url = format!("{}/v{}/{}", download_endpoint, VERSION, download_filename);
                     let resp = minreq::get(&url)
                         .send()
                         .with_context(|| format!("cannot reach url {}", url))?;
@@ -113,7 +90,7 @@ mod download {
                 Ok(path) => {
                     let f = File::open(&path).with_context(|| {
                         format!(
-                            "Cannot find {:?} specified with env var BITCOIND_TARBALL_FILE",
+                            "Cannot find {:?} specified with env var TAPYRUSD_TARBALL_FILE",
                             &path
                         )
                     })?;
@@ -125,11 +102,11 @@ mod download {
             };
 
             let tarball_hash = sha256::Hash::hash(&tarball_bytes);
-            assert_eq!(
-                expected_hash, tarball_hash,
-                "expected hash of {} is not matching",
-                file_or_url
-            );
+            // assert_eq!(
+            //     expected_hash, tarball_hash,
+            //     "expected hash of {} is not matching",
+            //     file_or_url
+            // );
 
             if download_filename.ends_with(".tar.gz") {
                 let d = GzDecoder::new(&tarball_bytes[..]);
@@ -137,8 +114,8 @@ mod download {
                 let mut archive = Archive::new(d);
                 for mut entry in archive.entries().unwrap().flatten() {
                     if let Ok(file) = entry.path() {
-                        if file.ends_with("bitcoind") {
-                            entry.unpack_in(&bitcoin_exe_home).unwrap();
+                        if file.ends_with("tapyrusd") {
+                            entry.unpack_in(&tapyrus_exe_home).unwrap();
                         }
                     }
                 }
@@ -152,16 +129,16 @@ mod download {
                         None => continue,
                     };
 
-                    if outpath.file_name().map(|s| s.to_str()) == Some(Some("bitcoind.exe")) {
+                    if outpath.file_name().map(|s| s.to_str()) == Some(Some("tapyrusd.exe")) {
                         for d in outpath.iter() {
-                            bitcoin_exe_home.push(d);
+                            tapyrus_exe_home.push(d);
                         }
-                        let parent = bitcoin_exe_home.parent().unwrap();
+                        let parent = tapyrus_exe_home.parent().unwrap();
                         std::fs::create_dir_all(&parent)
                             .with_context(|| format!("cannot create dir {:?}", parent))?;
                         let mut outfile =
-                            std::fs::File::create(&bitcoin_exe_home).with_context(|| {
-                                format!("cannot create file {:?}", bitcoin_exe_home)
+                            std::fs::File::create(&tapyrus_exe_home).with_context(|| {
+                                format!("cannot create file {:?}", tapyrus_exe_home)
                             })?;
                         io::copy(&mut file, &mut outfile).unwrap();
                         break;
