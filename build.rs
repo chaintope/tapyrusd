@@ -33,6 +33,11 @@ mod download {
         format!("tapyrus-core-{}-aarch64-linux-gnu.tar.gz", &VERSION)
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn download_filename() -> String {
+        format!("tapyrus-core-{}-unknown-gnu.tar.gz", &VERSION)
+    }
+
     fn get_expected_sha256(filename: &str) -> anyhow::Result<sha256::Hash> {
         let sha256sums_filename = format!("sha256/tapyrus-core-{}-SHA256SUMS", &VERSION);
         let sha256sums_filename = format!("{}.asc", sha256sums_filename);
