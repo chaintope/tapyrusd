@@ -11,7 +11,7 @@ edition = "2018"
 categories = ["cryptography::cryptocurrencies", "development-tools::testing"]
 
 [dependencies]
-tapyruscore-rpc = { git="https://github.com/chaintope/rust-tapyruscore-rpc", subdir = "client", features = ["rand"] }
+tapyruscore-rpc = { git="https://github.com/chaintope/rust-tapyruscore-rpc", branch="use_malfix_txid_for_outpoint", subdir = "client", features = ["rand"] }
 log = "0.4"
 which = "4.2.5"
 anyhow = "1.0.66"
